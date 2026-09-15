@@ -1,0 +1,31 @@
+name: PR Gate
+
+# Mirrors the caller shape of the real gate: job id `mq-guard` calls a reusable
+# workflow whose job id is `validate-pr`, producing the required status check
+# context `mq-guard / validate-pr`.
+#
+# merge_group is listed so the check can report against the queue's temporary
+# ref. Without it, every queued entry stalls until checkResponseTimeout.
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+    branches: [main]
+  merge_group:
+
+concurrency:
+  group: pr-gate-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fork-approval:
+    permissions:
+      statuses: write
+    uses: ./.github/workflows/reusable-fork-approval.yml
+
+  mq-guard:
+    needs: [fork-approval]
+    if: always() && !cancelled()
+    uses: ./.github/workflows/reusable-validate.yml
+    with:
+      gate-status: ${{ needs.fork-approval.result == 'success' }}

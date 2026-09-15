@@ -1,0 +1,44 @@
+name: Fork approval gate (reusable)
+
+# Gates external-fork pull_request_target runs on the fork-ci environment.
+# After approval, records probe/fork-verified on the PR head SHA.
+#
+# The environment expression is the load-bearing part: it resolves to '' for any
+# event that is not pull_request_target, so a merge_group run should be ungated.
+
+on:
+  workflow_call:
+
+permissions: {}
+
+jobs:
+  gate:
+    name: Fork approval gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      statuses: write
+    environment: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name != github.repository && 'fork-ci' || '' }}
+    steps:
+      - name: Report gating decision
+        run: |
+          echo "event_name = ${{ github.event_name }}"
+          echo "head_repo  = ${{ github.event.pull_request.head.repo.full_name }}"
+          echo "base_repo  = ${{ github.repository }}"
+
+      - name: Record approval on head SHA
+        if: github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name != github.repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          echo "recording probe/fork-verified on ${HEAD_SHA}"
+          gh api "repos/${REPO}/statuses/${HEAD_SHA}" \
+            -f state=success \
+            -f context=probe/fork-verified \
+            -f description="fork-ci environment approved for this commit"
+
+      - name: Approved
+        run: echo "authorised to run privileged jobs"

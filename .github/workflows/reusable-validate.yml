@@ -1,0 +1,67 @@
+name: Reusable Validate
+
+# Job id is `validate-pr` on purpose: the caller job id plus this job id form the
+# required status check context string, so renaming either breaks the ruleset.
+
+on:
+  workflow_call:
+    inputs:
+      gate-status:
+        required: false
+        type: boolean
+        default: true
+
+jobs:
+  validate-pr:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Report context
+        run: |
+          echo "event_name  = ${{ github.event_name }}"
+          echo "ref         = ${{ github.ref }}"
+          echo "sha         = ${{ github.sha }}"
+          echo "actor       = ${{ github.actor }}"
+          echo "head_repo   = ${{ github.event.pull_request.head.repo.full_name }}"
+          echo "pr_number   = ${{ github.event.pull_request.number }}"
+          echo "gate-status = ${{ inputs.gate-status }}"
+
+      - name: Record validated tree
+        # Which content actually got validated. Needed to answer the force-push
+        # question: did the queue validate the code that was approved?
+        run: |
+          echo "HEAD_SHA=$(git rev-parse HEAD)"
+          echo "TREE_SHA=$(git rev-parse HEAD^{tree})"
+          echo "--- payload files ---"
+          ls -1
+          echo "--- last 3 commits ---"
+          git log --oneline -3
+
+      - name: Secret visibility probe
+        env:
+          PROBE: ${{ secrets.PROBE_SECRET }}
+        run: |
+          if [ -n "$PROBE" ]; then
+            echo "SECRET_VISIBLE=yes"
+          else
+            echo "SECRET_VISIBLE=no"
+          fi
+
+      - name: Simulate CI
+        run: sleep 600
+
+      - name: Fail marker
+        run: |
+          if [ -f fail.txt ]; then
+            echo "::error title=fail marker::fail.txt present in the tree"
+            exit 1
+          fi
+
+      - name: Gate status
+        run: |
+          if [ "${{ inputs.gate-status }}" != "true" ]; then
+            echo "::error title=gate not satisfied::upstream gate reported ${{ inputs.gate-status }}"
+            exit 1
+          fi
