@@ -27,5 +27,9 @@ jobs:
     needs: [fork-approval]
     if: always() && !cancelled()
     uses: ./.github/workflows/reusable-validate.yml
+    # secrets: inherit is required for a called workflow to see any secret at
+    # all. Without it the secret probe reports "no" regardless of event type,
+    # which says nothing about merge_group.
+    secrets: inherit
     with:
       gate-status: ${{ needs.fork-approval.result == 'success' }}
