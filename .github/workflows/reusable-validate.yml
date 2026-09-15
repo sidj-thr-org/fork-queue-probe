@@ -50,7 +50,7 @@ jobs:
           fi
 
       - name: Simulate CI
-        run: sleep 600
+        run: sleep 180
 
       - name: Fail marker
         run: |
