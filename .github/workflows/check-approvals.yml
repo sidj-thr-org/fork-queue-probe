@@ -1,0 +1,45 @@
+name: Check Approvals
+
+# Mirrors the second required check in the real setup: a separate workflow,
+# triggered by pull_request_target and issue_comment, producing a check named
+# `Check Approvals`. It comes from a different ruleset than the merge guard,
+# which is the point. A queue declared on only one ruleset still has to satisfy
+# required checks from both.
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: check-approvals-${{ github.event.pull_request.number || github.event.issue.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  check-approvals:
+    name: Check Approvals
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: >-
+      (
+        github.event_name == 'issue_comment' &&
+        github.event.issue.pull_request != null
+      ) || (
+        github.event_name == 'pull_request_target' &&
+        !github.event.pull_request.draft
+      )
+    steps:
+      - name: Report context
+        run: |
+          echo "event_name = ${{ github.event_name }}"
+          echo "pr_number  = ${{ github.event.pull_request.number }}"
+          echo "head_repo  = ${{ github.event.pull_request.head.repo.full_name }}"
+
+      - name: Approvals satisfied
+        run: echo "approval policy evaluated by the ruleset; this check reports the result slot"
