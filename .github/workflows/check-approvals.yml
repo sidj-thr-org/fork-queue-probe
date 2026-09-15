@@ -12,6 +12,12 @@ on:
   pull_request_target:
     types: [opened, synchronize, reopened, ready_for_review]
     branches: [main]
+  # Added so this check reports against the queue's ref. The job condition below
+  # does not match merge_group, so the job is skipped, and a skipped job reports
+  # success. That is correct rather than a loophole. The ruleset enforces the
+  # approval policy before a PR can be enqueued, and a merge group run has no
+  # pull request to re-evaluate it against.
+  merge_group:
 
 permissions:
   contents: read
