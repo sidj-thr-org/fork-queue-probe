@@ -1,0 +1,58 @@
+# Replica of qvac's check-approvals.yml.
+#
+# Produces the check context `Check Approvals`, required by ruleset 23992022.
+#
+# The trigger list and the job `if` are copied from qvac unchanged, because
+# together they are the subject of A0: in a merge group this workflow does not
+# fire at all without a `merge_group` trigger, so the required context never
+# reports and the entry times out.
+#
+# Divergence, recorded in the fidelity table: qvac installs @qvac/ci and calls
+# `qvac-ci pending-approvals`. The replica does not. Approval enforcement in a
+# queue happens at the ruleset door, not in this job, so what the job does is
+# irrelevant to every test here. What matters is whether it reports at all.
+#
+# `merge_group` is deliberately ABSENT. Adding it is part of test A1.
+name: Check Approvals
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_target:
+    types: [opened, labeled, synchronize, ready_for_review]
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.issue.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  check-approvals:
+    name: Check Approvals
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # VERBATIM from qvac check-approvals.yml:24. Kept because it means this
+    # required check cannot fail a run even on a pull request, which is a
+    # property worth having on the record rather than discovering later.
+    continue-on-error: true
+    # VERBATIM from qvac check-approvals.yml:25-33. Matches neither
+    # merge_group nor anything else outside these two events.
+    if: >-
+      (
+        github.event_name == 'issue_comment' &&
+        contains(github.event.comment.body, 'review') &&
+        github.event.issue.pull_request != null
+      ) || (
+        github.event_name == 'pull_request_target' &&
+        !github.event.pull_request.draft
+      )
+    steps:
+      - name: Report
+        run: |
+          echo "CHECK_APPROVALS_EVENT=${{ github.event_name }}"
+          echo "CHECK_APPROVALS=reported"

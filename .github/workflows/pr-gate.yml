@@ -1,0 +1,195 @@
+# Replica of qvac's pr-gate-merge.yml, reduced to the jobs that BLOCK a merge.
+#
+# Fidelity: the constructs under test are copied verbatim from qvac and are
+# marked VERBATIM below. Everything else stands in for work the merge queue
+# never interacts with. See design.md's fidelity table.
+#
+# `merge_group` is deliberately ABSENT from the triggers. Test A0 measures what
+# a queue does without it; test A1 adds it. Do not add it before A0 is signed
+# off -- that ordering is the whole point of A0.
+name: Merge Guard
+
+on:
+  pull_request_target:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - labeled
+      - ready_for_review
+    branches:
+      - main
+  workflow_dispatch:
+
+# VERBATIM from pr-gate-merge.yml:15-18
+permissions:
+  contents: read
+  pull-requests: read
+  packages: read
+
+concurrency:
+  group: pr-gate-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Stands for qvac's fork-approval. The called workflow is byte-identical to
+  # qvac's reusable-fork-approval.yml, including the environment expression at
+  # its line 19 -- the expression that resolves to '' under merge_group, which
+  # is the mechanism A6 measures.
+  fork-approval:
+    permissions:
+      statuses: write
+    uses: ./.github/workflows/reusable-fork-approval.yml
+
+  # VERBATIM shape from pr-gate-merge.yml:36-58. Runs the real authorize-pr
+  # action, checked out from the default branch, never from the pull request.
+  # Its non-PR-event branch (authorize-pr/action.yml:76-79) is what A1 tests.
+  authorize:
+    needs: [fork-approval]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      statuses: read
+    outputs:
+      allowed: ${{ steps.auth.outputs.allowed }}
+    steps:
+      - name: Checkout authorize-pr (default branch)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # 6.0.2
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          sparse-checkout: .github/actions/authorize-pr
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Authorize
+        id: auth
+        uses: ./.github/actions/authorize-pr
+        with:
+          github-token: ${{ github.token }}
+
+      - name: Record the authorize verdict (A1)
+        run: |
+          echo "A1_EVENT=${{ github.event_name }}"
+          echo "A1_AUTHORIZE_ALLOWED=${{ steps.auth.outputs.allowed }}"
+
+  # VERBATIM condition from pr-gate-merge.yml:61. This single line is why the
+  # whole downstream chain skips in a merge group, which is what A2 measures.
+  changes:
+    if: github.event_name == 'pull_request_target'
+    runs-on: ubuntu-latest
+    outputs:
+      packages: ${{ steps.pkglist.outputs.packages }}
+    steps:
+      - name: Build package list
+        id: pkglist
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # Stands for qvac's dorny/paths-filter step. Same contract: a JSON
+          # array, empty when nothing relevant changed. Mechanism differs and
+          # that divergence is recorded in the fidelity table -- the filter
+          # engine is not something the merge queue interacts with.
+          changed=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}/files" --paginate --jq '.[].filename')
+          if echo "$changed" | grep -qv '^\.github/'; then
+            packages='["probe"]'
+          else
+            packages='[]'
+          fi
+          echo "packages=${packages}" >> "$GITHUB_OUTPUT"
+          echo "CHANGES_PACKAGES=${packages}"
+
+  # Stands for qvac's sanity-checks (pr-gate-merge.yml:141-167).
+  # VERBATIM condition from pr-gate-merge.yml:147.
+  # Carries both qvac checkout shapes so A4a and A4b are observable.
+  build-a:
+    if: needs.authorize.outputs.allowed == 'true' && needs.changes.outputs.packages != '[]' && needs.changes.outputs.packages != ''
+    needs: [authorize, changes, fork-approval]
+    runs-on: ubuntu-latest
+    steps:
+      # SHAPE A4a -- VERBATIM from pr-gate-merge.yml:156-160: no `ref:` at all.
+      - name: Checkout (shape=bare)
+        id: bare
+        continue-on-error: true
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # 6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          path: shape-bare
+
+      # SHAPE A4b -- VERBATIM from sanity-checks/action.yaml:29-30: both
+      # `repository` and `ref` resolve to empty strings under merge_group.
+      # continue-on-error so a step failure is recorded as the A4b result
+      # rather than aborting the job.
+      - name: Checkout (shape=empty)
+        id: empty
+        continue-on-error: true
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # 6.0.2
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+          path: shape-empty
+
+      - name: Report what each shape resolved to (A4a, A4b)
+        run: |
+          set -uo pipefail
+          report() {
+            local label="$1" dir="$2" outcome="$3"
+            echo "SHAPE=${label} STEP_OUTCOME=${outcome}"
+            if [ -d "$dir/.git" ]; then
+              echo "SHAPE=${label} HEAD=$(git -C "$dir" rev-parse HEAD)"
+              echo "SHAPE=${label} SUBJECT=$(git -C "$dir" log -1 --format=%s)"
+              echo "SHAPE=${label} FORK_ONLY_FILE=$([ -f "$dir/fork-only.txt" ] && echo present || echo absent)"
+            else
+              echo "SHAPE=${label} HEAD=<no checkout>"
+            fi
+          }
+          report bare  shape-bare  "${{ steps.bare.outcome }}"
+          report empty shape-empty "${{ steps.empty.outcome }}"
+
+      # Deterministic failure lever. A marker on the merged tree fails this
+      # job, which is how D1, D11 and D12 drive a red merge group without
+      # touching the gate logic itself.
+      - name: Marker gate
+        run: |
+          if [ -f shape-bare/fail-build-a ]; then
+            echo "::error title=build-a marker::fail-build-a present on the checked-out tree"
+            exit 1
+          fi
+          echo "BUILD_A=pass"
+
+  # Stands for qvac's verify-prebuilds (pr-gate-merge.yml:179-181).
+  # VERBATIM condition from pr-gate-merge.yml:181 -- note it gates only on
+  # `allowed`, not on the package list, so it skips for a different reason
+  # than build-a. Both shapes feed the guard; that is why there are two.
+  build-b:
+    needs: [authorize, changes, fork-approval]
+    if: needs.authorize.outputs.allowed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Marker gate
+        run: |
+          echo "BUILD_B_EVENT=${{ github.event_name }}"
+          echo "BUILD_B=pass"
+
+  # VERBATIM from pr-gate-merge.yml:222-248, including both skipped-as-success
+  # expressions. These are the subject of A3: in a merge group `changes` skips,
+  # build-a and build-b skip with it, and each expression is predicted to
+  # resolve `true` anyway.
+  mq-guard:
+    needs: [fork-approval, authorize, changes, build-a, build-b]
+    if: |
+      always() && !cancelled() &&
+      (needs.changes.result == 'success' || needs.changes.result == 'skipped')
+    permissions:
+      contents: read
+      packages: read
+    uses: ./.github/workflows/reusable-validate.yml
+    with:
+      sanity-checks-status: ${{ needs.fork-approval.result == 'success' && needs.authorize.result == 'success' && needs.authorize.outputs.allowed == 'true' && (needs.build-a.result == 'success' || needs.build-a.result == 'skipped') }}
+      build-status: ${{ needs.fork-approval.result == 'success' && needs.authorize.result == 'success' && needs.authorize.outputs.allowed == 'true' && (needs.build-b.result == 'success' || needs.build-b.result == 'skipped') }}
