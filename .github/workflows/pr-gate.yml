@@ -171,18 +171,68 @@ jobs:
     needs: [authorize, changes, fork-approval]
     if: needs.authorize.outputs.allowed == 'true'
     runs-on: ubuntu-latest
+    env:
+      # VERBATIM shape from pr-gate-merge.yml:202,208 -- neither has a
+      # fallback, so both are empty strings in a merge group. qvac feeds these
+      # to prebuild-status/verify.mjs:44-45.
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      PR_UPDATED_AT: ${{ github.event.pull_request.updated_at }}
+      CHANGED_PACKAGES: ${{ needs.changes.outputs.packages || '[]' }}
     steps:
-      - name: Marker gate
+      - name: Report the verify-prebuilds inputs (A8)
         run: |
           echo "BUILD_B_EVENT=${{ github.event_name }}"
+          echo "BUILD_B_HEAD_SHA=[${HEAD_SHA}]"
+          echo "BUILD_B_PR_UPDATED_AT=[${PR_UPDATED_AT}]"
+          echo "BUILD_B_CHANGED_PACKAGES=[${CHANGED_PACKAGES}]"
           echo "BUILD_B=pass"
+
+  # Stands for qvac's sdk-pod-checks (pr-gate-merge.yml:214-220).
+  # VERBATIM needs graph from pr-gate-merge.yml:215 -- note it does NOT depend
+  # on `changes`. That is the whole reason this job exists: it is the only
+  # build job that still RUNS when `changes` skips, so it is the one that
+  # decides whether the guard fails or greens in a merge group.
+  #
+  # Its body reproduces the failure shape at pr-checks-sdk-pod.yml:103,126:
+  # `set -euo pipefail` plus a fetch built from an empty PR number.
+  build-c:
+    needs: [authorize, fork-approval]
+    if: needs.authorize.outputs.allowed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout base
+        continue-on-error: true
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # 6.0.2
+        with:
+          # VERBATIM from pr-checks-sdk-pod.yml:88 -- the `|| github.ref`
+          # fallback silently points at the merge-group branch.
+          ref: ${{ github.event.pull_request.base.sha || github.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Detect (mirrors the sdk-pod detect step)
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          echo "BUILD_C_EVENT=${EVENT}"
+          echo "BUILD_C_PR_NUMBER=[${PR_NUMBER}]"
+          echo "BUILD_C_BASE_SHA=[${BASE_SHA}]"
+          echo "BUILD_C_HEAD_SHA=[${HEAD_SHA}]"
+          echo "BUILD_C_RESOLVED_HEAD=$(git rev-parse HEAD 2>/dev/null || echo '<no checkout>')"
+          # pr-checks-sdk-pod.yml:126 -- with an empty PR number this becomes
+          # `refs/pull//head`, which fails, and pipefail takes the job with it.
+          git fetch origin "refs/pull/${PR_NUMBER}/head"
+          echo "BUILD_C=pass"
 
   # VERBATIM from pr-gate-merge.yml:222-248, including both skipped-as-success
   # expressions. These are the subject of A3: in a merge group `changes` skips,
   # build-a and build-b skip with it, and each expression is predicted to
   # resolve `true` anyway.
   mq-guard:
-    needs: [fork-approval, authorize, changes, build-a, build-b]
+    needs: [fork-approval, authorize, changes, build-a, build-b, build-c]
     if: |
       always() && !cancelled() &&
       (needs.changes.result == 'success' || needs.changes.result == 'skipped')
@@ -193,3 +243,4 @@ jobs:
     with:
       sanity-checks-status: ${{ needs.fork-approval.result == 'success' && needs.authorize.result == 'success' && needs.authorize.outputs.allowed == 'true' && (needs.build-a.result == 'success' || needs.build-a.result == 'skipped') }}
       build-status: ${{ needs.fork-approval.result == 'success' && needs.authorize.result == 'success' && needs.authorize.outputs.allowed == 'true' && (needs.build-b.result == 'success' || needs.build-b.result == 'skipped') }}
+      general-checks-status: ${{ needs.fork-approval.result == 'success' && needs.authorize.result == 'success' && needs.authorize.outputs.allowed == 'true' && (needs.build-c.result == 'success' || needs.build-c.result == 'skipped') }}

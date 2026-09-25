@@ -22,6 +22,11 @@ on:
         type: boolean
         description: "Stands for qvac's verify-prebuilds result"
         default: true
+      general-checks-status:
+        required: false
+        type: boolean
+        description: "Stands for qvac's sdk-pod-checks result"
+        default: true
 
 jobs:
   validate-pr:
@@ -36,6 +41,7 @@ jobs:
           echo "GUARD_EVENT=${{ github.event_name }}"
           echo "GUARD_INPUT_sanity-checks-status=[${{ inputs.sanity-checks-status }}]"
           echo "GUARD_INPUT_build-status=[${{ inputs.build-status }}]"
+          echo "GUARD_INPUT_general-checks-status=[${{ inputs.general-checks-status }}]"
 
           if [[ "${{ inputs.sanity-checks-status }}" != "" && "${{ inputs.sanity-checks-status }}" != "true" ]]; then
             echo "::error title=Sanity checks have not returned success::sanity-checks-status is not true"
@@ -43,6 +49,10 @@ jobs:
           fi
           if [[ "${{ inputs.build-status }}" != "" && "${{ inputs.build-status }}" != "true" ]]; then
             echo "::error title=Build has not returned success::build-status is not true"
+            failed=1
+          fi
+          if [[ "${{ inputs.general-checks-status }}" != "" && "${{ inputs.general-checks-status }}" != "true" ]]; then
+            echo "::error title=General checks have not returned success::general-checks-status is not true"
             failed=1
           fi
 
