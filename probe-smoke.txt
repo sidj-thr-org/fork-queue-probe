@@ -1,0 +1,1 @@
+smoke test for the round-2 gate chain (3 build shapes)
