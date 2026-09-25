@@ -1,0 +1,141 @@
+name: Authorize PR
+description: >
+  Security gate for pull_request_target workflows. Same-repo PRs are trusted.
+  Every external fork PR requires a SHA-bound qvac/fork-verified commit status
+  (recorded by fork-approval after fork-ci environment approval) — write-or-higher
+  permission on the actor does NOT exempt a fork, because the actor who triggers a
+  synchronize is not necessarily the author of the commit being run. Optional label
+  input adds a pod-specific label gate (e.g. safe-to-test) on top of that approval.
+  Draft PRs are blocked. Run only after fork-approval and checkout authorize-pr
+  from the default branch — never from the PR merge ref.
+inputs:
+  label:
+    description: "When set, external fork PRs must carry this label in addition to SHA-bound fork-ci approval."
+    required: false
+    default: ""
+  github-token:
+    description: "GitHub token for permission check and status API calls"
+    required: true
+
+outputs:
+  allowed:
+    description: "true when the workflow is authorized to proceed"
+    value: ${{ steps.check.outputs.allowed }}
+  has_write:
+    description: "1 when the triggering actor has write-or-higher repo permission"
+    value: ${{ steps.perm.outputs.has-permission }}
+
+runs:
+  using: composite
+  steps:
+    - name: Check actor write permission
+      id: perm
+      uses: scherermichael-oss/action-has-permission@136e061bfe093832d87f090dd768e14e27a740d3 # 1.0.6
+      with:
+        required-permission: write
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+
+    - name: Resolve approved-SHA commit status
+      id: approved
+      if: >-
+        github.event_name == 'pull_request_target' ||
+        github.event_name == 'pull_request'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        REPO: ${{ github.repository }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        STATUS_CONTEXT: qvac/fork-verified
+      run: |
+        approved=false
+        if [ -n "$HEAD_SHA" ]; then
+          state=$(gh api "repos/${REPO}/commits/${HEAD_SHA}/statuses" \
+            --jq "map(select(.context == \"${STATUS_CONTEXT}\"))[0].state // \"\"" \
+            2>/dev/null || echo "")
+          if [ "$state" = "success" ]; then
+            approved=true
+          fi
+        fi
+        echo "approved=$approved" >> "$GITHUB_OUTPUT"
+
+    - name: Check authorization
+      id: check
+      shell: bash
+      env:
+        EVENT: ${{ github.event_name }}
+        ACTION: ${{ github.event.action }}
+        HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        BASE_REPO: ${{ github.repository }}
+        IS_DRAFT: ${{ github.event.pull_request.draft }}
+        HAS_WRITE: ${{ steps.perm.outputs.has-permission }}
+        HAS_APPROVED_SHA: ${{ steps.approved.outputs.approved }}
+        LABEL_NAME: ${{ inputs.label }}
+        LABELS_JSON: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+      run: |
+        if [ "$EVENT" != "pull_request_target" ] && [ "$EVENT" != "pull_request" ]; then
+          echo "::notice::Non-PR event ($EVENT) — authorized"
+          echo "allowed=true" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        if [ "$IS_DRAFT" = "true" ]; then
+          echo "::notice::Draft PR — blocked until ready-for-review"
+          echo "allowed=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        IS_SAME_REPO=false
+        shopt -s nocasematch
+        if [[ -n "$HEAD_REPO" && "$HEAD_REPO" == "$BASE_REPO" ]]; then
+          IS_SAME_REPO=true
+        fi
+        shopt -u nocasematch
+        if [ "$IS_SAME_REPO" = "true" ]; then
+          echo "::notice::Same-repo PR — authorized"
+          echo "allowed=true" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        echo "::notice::Actor '$GITHUB_ACTOR' write-or-higher: $HAS_WRITE"
+        if [ "$HAS_WRITE" = "1" ]; then
+          if [ "$HAS_APPROVED_SHA" = "true" ]; then
+            echo "::notice::Actor has write-or-higher permission — authorized"
+            echo "allowed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::Write-capable actor on external fork without SHA-bound fork-ci approval — skipping"
+            echo "allowed=false" >> "$GITHUB_OUTPUT"
+          fi
+          exit 0
+        fi
+
+        if [ -z "$LABEL_NAME" ]; then
+          if [ "$HAS_APPROVED_SHA" = "true" ]; then
+            echo "::notice::External fork PR — SHA-bound fork-ci approval confirmed"
+            echo "allowed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::External fork PR without fork-ci approval on this SHA — skipping"
+            echo "allowed=false" >> "$GITHUB_OUTPUT"
+          fi
+          exit 0
+        fi
+
+        HAS_LABEL=$(echo "$LABELS_JSON" | jq -r --arg l "$LABEL_NAME" \
+          'if . == null then "false" elif any(. == $l) then "true" else "false" end')
+
+        if [ "$ACTION" = "synchronize" ] && [ "$HAS_LABEL" != "true" ]; then
+          echo "::warning::External fork synchronize without '$LABEL_NAME' — skipping"
+          echo "allowed=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        if [ "$HAS_LABEL" = "true" ] && [ "$HAS_APPROVED_SHA" = "true" ]; then
+          echo "::notice::Fork PR with '$LABEL_NAME' label and SHA-bound approval — authorized"
+          echo "allowed=true" >> "$GITHUB_OUTPUT"
+        elif [ "$HAS_LABEL" = "true" ]; then
+          echo "::warning::Fork PR with '$LABEL_NAME' but no SHA-bound fork-ci approval on this commit — skipping"
+          echo "allowed=false" >> "$GITHUB_OUTPUT"
+        else
+          echo "::warning::External fork PR without '$LABEL_NAME' label — skipping"
+          echo "allowed=false" >> "$GITHUB_OUTPUT"
+        fi
