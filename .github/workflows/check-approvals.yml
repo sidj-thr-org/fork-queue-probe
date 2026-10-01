@@ -21,6 +21,9 @@ on:
   pull_request_target:
     types: [opened, labeled, synchronize, ready_for_review]
     branches: [main]
+  # Added at task 2.2 (test A1). The job if below still does not match
+  # merge_group, so the job skips and a skipped job reports success.
+  merge_group:
 
 permissions:
   contents: read

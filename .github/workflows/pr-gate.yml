@@ -19,6 +19,10 @@ on:
       - ready_for_review
     branches:
       - main
+  # Added at task 2.2 (test A1). Mirrors the Phase 1 change the PRD
+  # proposes for qvac: merge_group on pr-gate-merge.yml and
+  # check-approvals.yml only. A0 measured the behaviour without it.
+  merge_group:
   workflow_dispatch:
 
 # VERBATIM from pr-gate-merge.yml:15-18
