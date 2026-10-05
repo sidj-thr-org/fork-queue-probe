@@ -183,6 +183,20 @@ jobs:
       # Deterministic failure lever. A marker on the merged tree fails this
       # job, which is how D1, D11 and D12 drive a red merge group without
       # touching the gate logic itself.
+      # Configurable delay. Default 0 so the chain stays fast. A repo variable
+      # PROBE_DELAY widens the window for the Phase C tests that must act while
+      # an entry is still queued, and gives Phase D a measurable per-job
+      # duration -- the open question in design.md.
+      #
+      # This is the ONE place a sleep is allowed. It is a test instrument, not
+      # filler: without a duration, throughput numbers describe nothing.
+      - name: Configurable delay
+        env:
+          DELAY: ${{ vars.PROBE_DELAY || '0' }}
+        run: |
+          echo "PROBE_DELAY=${DELAY}s"
+          [ "${DELAY}" = "0" ] || sleep "${DELAY}"
+
       - name: Marker gate
         run: |
           if [ -f shape-bare/fail-build-a ]; then
