@@ -191,6 +191,35 @@ jobs:
           fi
           echo "BUILD_A=pass"
 
+      # Phase B / D1. A semantic conflict: every item-*.txt on the checked-out
+      # tree must be named in allowlist.txt on that same tree.
+      #
+      # This is the class of failure a merge queue exists to catch. A pull
+      # request cut before `b` was removed from the allowlist passes on its own
+      # head, because its copy of the allowlist still lists `b`. Merged with a
+      # base that has dropped `b`, it fails. Neither side is broken alone, so
+      # it cannot be caught at pull request level -- which is exactly why round
+      # 1's D1 attempt, poisoning main directly, could never be enqueued.
+      - name: Allowlist gate (D1)
+        run: |
+          set -uo pipefail
+          cd shape-bare
+          test -f allowlist.txt || { echo "ALLOWLIST=absent, gate inert"; exit 0; }
+          echo "ALLOWLIST_CONTENT=[$(tr '\n' ' ' < allowlist.txt)]"
+          rc=0
+          for f in item-*.txt; do
+            [ -e "$f" ] || continue
+            key="${f#item-}"; key="${key%.txt}"
+            if grep -qx "$key" allowlist.txt; then
+              echo "  ok   $f (key '"'"'$key'"'"' is allowed)"
+            else
+              echo "::error title=Disallowed item::$f carries key '"'"'$key'"'"', not in allowlist.txt on this tree"
+              rc=1
+            fi
+          done
+          echo "ALLOWLIST_GATE=$([ "$rc" -eq 0 ] && echo pass || echo fail)"
+          exit "$rc"
+
   # Stands for qvac's verify-prebuilds (pr-gate-merge.yml:179-181).
   # VERBATIM condition from pr-gate-merge.yml:181 -- note it gates only on
   # `allowed`, not on the package list, so it skips for a different reason
@@ -312,9 +341,14 @@ jobs:
   # resolves to '' under merge_group (measured in A6). So this also answers a
   # second question: does an explicitly declared environment still gate a
   # merge-group run?
+  # A7c is recorded (run 37276781053: env secret visible, and the hard-coded
+  # environment DID gate). The `environment:` line is commented out now because
+  # it gated EVERY subsequent merge-group run, adding a manual approval to each
+  # test and inflating the fork-ci approval count that the PRD measures.
+  # Restore it only to re-run A7c.
   secret-probe-env:
     runs-on: ubuntu-latest
-    environment: fork-ci
+    # environment: fork-ci
     env:
       S: ${{ secrets.PROBE_ENV_SECRET }}
     steps:
