@@ -259,6 +259,64 @@ jobs:
   # expressions. These are the subject of A3: in a merge group `changes` skips,
   # build-a and build-b skip with it, and each expression is predicted to
   # resolve `true` anyway.
+  # ---------------------------------------------------------------------------
+  # A7 secret probes. NOT part of the fidelity-mirrored chain -- these jobs have
+  # no qvac counterpart and feed nothing into the guard. They exist only to
+  # measure what a merge-group run can read.
+  #
+  # Values are never printed. Each step reports only whether the secret is
+  # non-empty, because GitHub masks the value but not things derived from it.
+  #
+  # Deliberately no `needs:` so they run in a merge group regardless of the
+  # `changes` outcome.
+  # ---------------------------------------------------------------------------
+
+  # A7a: repository-level secret read directly by the caller workflow. This is
+  # qvac's actual shape -- pr-gate-merge.yml can reference secrets.* itself,
+  # with no `secrets: inherit` anywhere.
+  secret-probe-repo:
+    runs-on: ubuntu-latest
+    env:
+      S: ${{ secrets.PROBE_SECRET }}
+    steps:
+      - name: Probe repo-level secret
+        run: |
+          echo "A7a_EVENT=${{ github.event_name }}"
+          echo "A7a_REPO_SECRET_VISIBLE=$([ -n "$S" ] && echo yes || echo no)"
+          echo "A7a_REPO_SECRET_LEN=${#S}"
+
+  # A7c: environment-scoped secret. The environment is hard-coded here rather
+  # than computed, unlike reusable-fork-approval.yml:19 whose expression
+  # resolves to '' under merge_group (measured in A6). So this also answers a
+  # second question: does an explicitly declared environment still gate a
+  # merge-group run?
+  secret-probe-env:
+    runs-on: ubuntu-latest
+    environment: fork-ci
+    env:
+      S: ${{ secrets.PROBE_ENV_SECRET }}
+    steps:
+      - name: Probe environment-scoped secret
+        run: |
+          echo "A7c_EVENT=${{ github.event_name }}"
+          echo "A7c_ENV_SECRET_VISIBLE=$([ -n "$S" ] && echo yes || echo no)"
+          echo "A7c_ENV_SECRET_LEN=${#S}"
+
+  # A7b: called workflow WITHOUT `secrets: inherit`. This is qvac's shape --
+  # pr-gate-merge.yml:220,238 pass no secrets block at all.
+  secret-probe-called-noinherit:
+    uses: ./.github/workflows/reusable-secret-probe.yml
+    with:
+      label: A7b_NOINHERIT
+
+  # A7d: identical call WITH `secrets: inherit`. The single variable under
+  # test, and the thing round 1 added permanently rather than isolating.
+  secret-probe-called-inherit:
+    uses: ./.github/workflows/reusable-secret-probe.yml
+    with:
+      label: A7d_INHERIT
+    secrets: inherit
+
   mq-guard:
     needs: [fork-approval, authorize, changes, build-a, build-b, build-c]
     if: |
