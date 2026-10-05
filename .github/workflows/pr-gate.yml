@@ -4,9 +4,9 @@
 # marked VERBATIM below. Everything else stands in for work the merge queue
 # never interacts with. See design.md's fidelity table.
 #
-# `merge_group` is deliberately ABSENT from the triggers. Test A0 measures what
-# a queue does without it; test A1 adds it. Do not add it before A0 is signed
-# off -- that ordering is the whole point of A0.
+# `merge_group` is live on both gate workflows as of task 2.2 (test A1).
+# The `changes` job below now carries the Phase 1 fix under test; A0 and A2
+# recorded the behaviour before it.
 name: Merge Guard
 
 on:
@@ -77,27 +77,51 @@ jobs:
           echo "A1_EVENT=${{ github.event_name }}"
           echo "A1_AUTHORIZE_ALLOWED=${{ steps.auth.outputs.allowed }}"
 
-  # VERBATIM condition from pr-gate-merge.yml:61. This single line is why the
-  # whole downstream chain skips in a merge group, which is what A2 measures.
+  # NO LONGER VERBATIM -- this job now carries the Phase 1 fix under test.
+  #
+  # qvac's original is `if: github.event_name == 'pull_request_target'`
+  # (pr-gate-merge.yml:61). A0 and A2 measured that version: the job skips in a
+  # merge group and takes build-a and build-b with it, so two of three guard
+  # inputs green on nothing (A3).
+  #
+  # The fix must produce a real package list in a merge group, computed from
+  # merge_group.base_sha..head_sha rather than the PR payload. Without it,
+  # repairing build-c alone would leave the guard reporting success having
+  # validated nothing, which is the actual risk A3 exposed.
   changes:
-    if: github.event_name == 'pull_request_target'
+    if: github.event_name == 'pull_request_target' || github.event_name == 'merge_group'
     runs-on: ubuntu-latest
     outputs:
       packages: ${{ steps.pkglist.outputs.packages }}
     steps:
+      - name: Checkout for the merge-group diff
+        if: github.event_name == 'merge_group'
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # 6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
       - name: Build package list
         id: pkglist
         env:
           GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           REPO: ${{ github.repository }}
+          MG_BASE: ${{ github.event.merge_group.base_sha }}
+          MG_HEAD: ${{ github.event.merge_group.head_sha }}
         run: |
           set -euo pipefail
-          # Stands for qvac's dorny/paths-filter step. Same contract: a JSON
-          # array, empty when nothing relevant changed. Mechanism differs and
-          # that divergence is recorded in the fidelity table -- the filter
-          # engine is not something the merge queue interacts with.
-          changed=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}/files" --paginate --jq '.[].filename')
+          echo "CHANGES_EVENT=${EVENT}"
+          echo "CHANGES_MG_BASE=[${MG_BASE}]"
+          echo "CHANGES_MG_HEAD=[${MG_HEAD}]"
+          if [ "$EVENT" = "merge_group" ]; then
+            # The merge group payload carries its own base and head, so the
+            # diff needs no PR payload at all.
+            changed=$(git diff --name-only "${MG_BASE}" "${MG_HEAD}")
+          else
+            changed=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}/files" --paginate --jq '.[].filename')
+          fi
+          echo "CHANGES_FILES=[$(echo "$changed" | tr '\n' ' ')]"
           if echo "$changed" | grep -qv '^\.github/'; then
             packages='["probe"]'
           else
@@ -148,7 +172,7 @@ jobs:
             if [ -d "$dir/.git" ]; then
               echo "SHAPE=${label} HEAD=$(git -C "$dir" rev-parse HEAD)"
               echo "SHAPE=${label} SUBJECT=$(git -C "$dir" log -1 --format=%s)"
-              echo "SHAPE=${label} FORK_ONLY_FILE=$([ -f "$dir/fork-only.txt" ] && echo present || echo absent)"
+              echo "SHAPE=${label} FORK_ONLY_FILE=$([ -f "$dir/fork-a0.txt" ] && echo present || echo absent)"
             else
               echo "SHAPE=${label} HEAD=<no checkout>"
             fi
