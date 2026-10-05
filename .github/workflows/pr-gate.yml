@@ -228,13 +228,21 @@ jobs:
     if: needs.authorize.outputs.allowed == 'true'
     runs-on: ubuntu-latest
     steps:
+      # FIXED. Was `github.event.pull_request.base.sha || github.ref`, verbatim
+      # from pr-checks-sdk-pod.yml:88. In a merge group the first operand is
+      # empty and `github.ref` is the QUEUE BRANCH, so the "trusted base"
+      # checkout silently read the merge-group tree -- defeating the
+      # config-from-base anti-tampering property documented at
+      # pr-checks-sdk-pod.yml:71-76. Measured in run 36867315234:
+      # BUILD_C_RESOLVED_HEAD was the merge-group commit, not main.
+      #
+      # The merge group payload carries its own base, so name it explicitly
+      # and never fall through to github.ref.
       - name: Checkout base
         continue-on-error: true
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # 6.0.2
         with:
-          # VERBATIM from pr-checks-sdk-pod.yml:88 -- the `|| github.ref`
-          # fallback silently points at the merge-group branch.
-          ref: ${{ github.event.pull_request.base.sha || github.ref }}
+          ref: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
           fetch-depth: 0
           persist-credentials: false
       - name: Detect (mirrors the sdk-pod detect step)
@@ -243,16 +251,30 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          MG_BASE: ${{ github.event.merge_group.base_sha }}
+          MG_HEAD: ${{ github.event.merge_group.head_sha }}
         run: |
           set -euo pipefail
           echo "BUILD_C_EVENT=${EVENT}"
           echo "BUILD_C_PR_NUMBER=[${PR_NUMBER}]"
-          echo "BUILD_C_BASE_SHA=[${BASE_SHA}]"
-          echo "BUILD_C_HEAD_SHA=[${HEAD_SHA}]"
           echo "BUILD_C_RESOLVED_HEAD=$(git rev-parse HEAD 2>/dev/null || echo '<no checkout>')"
-          # pr-checks-sdk-pod.yml:126 -- with an empty PR number this becomes
-          # `refs/pull//head`, which fails, and pipefail takes the job with it.
-          git fetch origin "refs/pull/${PR_NUMBER}/head"
+          # FIXED. Was an unconditional `git fetch origin refs/pull/${PR_NUMBER}/head`
+          # (pr-checks-sdk-pod.yml:126). With an empty PR number that is
+          # `refs/pull//head`, which exits 128 and, under `set -euo pipefail`,
+          # takes the whole job. Measured in run 36867315234.
+          #
+          # A merge group needs no pull ref at all: base and head are both in
+          # the payload.
+          if [ "$EVENT" = "merge_group" ]; then
+            echo "BUILD_C_DIFF_RANGE=[${MG_BASE}..${MG_HEAD}]"
+            git fetch -q origin "${MG_BASE}" "${MG_HEAD}" 2>/dev/null || true
+            changed=$(git diff --name-only "${MG_BASE}" "${MG_HEAD}")
+          else
+            echo "BUILD_C_DIFF_RANGE=[${BASE_SHA}...${HEAD_SHA}]"
+            git fetch -q origin "refs/pull/${PR_NUMBER}/head"
+            changed=$(git diff --name-only "${BASE_SHA}" "${HEAD_SHA}")
+          fi
+          echo "BUILD_C_CHANGED=[$(echo "$changed" | tr '\n' ' ')]"
           echo "BUILD_C=pass"
 
   # VERBATIM from pr-gate-merge.yml:222-248, including both skipped-as-success
