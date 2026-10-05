@@ -74,6 +74,11 @@ jobs:
 
       - name: Record the authorize verdict (A1)
         run: |
+          # A5 MARKER. This line exists ONLY on the a5-provenance branch and is
+          # deliberately absent from main. If it appears in the merge-group run
+          # log, the merge group executed the pull request's workflow
+          # definition. If it does not, it executed the base branch's.
+          echo "PROVENANCE=pr"
           echo "A1_EVENT=${{ github.event_name }}"
           echo "A1_AUTHORIZE_ALLOWED=${{ steps.auth.outputs.allowed }}"
 
