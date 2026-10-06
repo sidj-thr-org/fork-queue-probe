@@ -17,6 +17,8 @@ on:
   pull_request_target:
     types: [opened, synchronize, reopened, labeled, ready_for_review]
     branches: [main]
+  # S2 / Option A: the trigger qvac's producers would need.
+  merge_group:
   workflow_dispatch:
 
 permissions:
@@ -28,9 +30,13 @@ jobs:
     runs-on: ubuntu-latest
     # VERBATIM shape from on-pr-nx.yml:558-560. `merge_group` is absent, so
     # this job skips in a queue even if the trigger above is added.
+    # S2 / Option A: `merge_group` added. Without this the job skips in a queue
+    # even with the trigger above, because qvac gates it on PR events only
+    # (on-pr-nx.yml:558-560).
     if: >-
       always() && !cancelled() &&
-      (github.event_name == 'pull_request' || github.event_name == 'pull_request_target')
+      (github.event_name == 'pull_request' || github.event_name == 'pull_request_target' ||
+       github.event_name == 'merge_group')
     steps:
       - name: Publish probe status for the merge guard
         env:
@@ -38,7 +44,8 @@ jobs:
           REPO: ${{ github.repository }}
           # VERBATIM from on-pr-nx.yml:585 -- posted on the PR head, which is
           # not the merge-group head.
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          # S2 / Option A: post on whichever head this event actually has.
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
           EVENT: ${{ github.event_name }}
         run: |
           set -euo pipefail
