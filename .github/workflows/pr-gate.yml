@@ -268,7 +268,9 @@ jobs:
           echo "STATUS_EVENT=${{ github.event_name }}"
           echo "STATUS_PR_HEAD=[${HEAD_SHA}]"
           echo "STATUS_MG_HEAD=[${MG_HEAD}]"
-          look_at="${HEAD_SHA}"
+          # S2: fall back to the merge-group head, which is where an
+          # Option A producer posts.
+          look_at="${HEAD_SHA:-$MG_HEAD}"
           if [ -z "$look_at" ]; then
             echo "STATUS_LOOKUP=skipped, no PR head sha in this event"
             echo "STATUS_RESULT=absent"
