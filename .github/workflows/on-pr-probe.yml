@@ -1,0 +1,52 @@
+# Replica of qvac's prebuild-status PRODUCER, e.g. on-pr-nx.yml's
+# `publish-prebuild-status` job.
+#
+# The point under test: qvac's merge guard does not build anything itself. It
+# reads commit statuses that workflows like this one post on the PULL REQUEST
+# HEAD sha. Two things about that are copied verbatim and are the subject of
+# the test:
+#
+#   1. the trigger list has NO `merge_group`          (on-pr-nx.yml on: block)
+#   2. the publishing job's `if` admits only pull_request / pull_request_target
+#      (on-pr-nx.yml:558-560)
+#
+# Either one alone prevents a status from existing in a merge group.
+name: On PR probe (status producer)
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, labeled, ready_for_review]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  statuses: write
+
+jobs:
+  publish-probe-status:
+    runs-on: ubuntu-latest
+    # VERBATIM shape from on-pr-nx.yml:558-560. `merge_group` is absent, so
+    # this job skips in a queue even if the trigger above is added.
+    if: >-
+      always() && !cancelled() &&
+      (github.event_name == 'pull_request' || github.event_name == 'pull_request_target')
+    steps:
+      - name: Publish probe status for the merge guard
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          # VERBATIM from on-pr-nx.yml:585 -- posted on the PR head, which is
+          # not the merge-group head.
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          echo "PRODUCER_EVENT=${EVENT}"
+          echo "PRODUCER_TARGET_SHA=[${HEAD_SHA}]"
+          gh api "repos/${REPO}/statuses/${HEAD_SHA}" \
+            -f state=success \
+            -f context=probe/prebuild-x \
+            -f description="probe prebuild ok" \
+            -f target_url="${GITHUB_SERVER_URL}/${REPO}/actions/runs/${GITHUB_RUN_ID}" >/dev/null
+          echo "PRODUCER_POSTED=probe/prebuild-x on ${HEAD_SHA}"

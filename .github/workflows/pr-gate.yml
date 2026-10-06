@@ -250,6 +250,43 @@ jobs:
       PR_UPDATED_AT: ${{ github.event.pull_request.updated_at }}
       CHANGED_PACKAGES: ${{ needs.changes.outputs.packages || '[]' }}
     steps:
+      # S1 / S2. Replica of qvac's verify-prebuilds status READ
+      # (pr-gate-merge.yml:198-209). It does not build; it looks for a commit
+      # status that the producer workflow posted on the PULL REQUEST HEAD sha.
+      # In a merge group that sha is empty and the producer never ran, so this
+      # is the step that decides whether the gate can see prebuild results at
+      # all. Fail-closed on purpose, mirroring verify.mjs's own posture.
+      - name: Verify probe status (S1/S2)
+        id: statuscheck
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          MG_HEAD: ${{ github.event.merge_group.head_sha }}
+        run: |
+          set -uo pipefail
+          echo "STATUS_EVENT=${{ github.event_name }}"
+          echo "STATUS_PR_HEAD=[${HEAD_SHA}]"
+          echo "STATUS_MG_HEAD=[${MG_HEAD}]"
+          look_at="${HEAD_SHA}"
+          if [ -z "$look_at" ]; then
+            echo "STATUS_LOOKUP=skipped, no PR head sha in this event"
+            echo "STATUS_RESULT=absent"
+            exit 1
+          fi
+          state=$(gh api "repos/${REPO}/commits/${look_at}/statuses"             --jq 'map(select(.context=="probe/prebuild-x"))[0].state // ""' 2>/dev/null || echo "")
+          echo "STATUS_ON_PR_HEAD=[${state}]"
+          if [ -n "${MG_HEAD}" ]; then
+            mgstate=$(gh api "repos/${REPO}/commits/${MG_HEAD}/statuses"               --jq 'map(select(.context=="probe/prebuild-x"))[0].state // ""' 2>/dev/null || echo "")
+            echo "STATUS_ON_MERGE_GROUP_HEAD=[${mgstate}]"
+          fi
+          if [ "$state" = "success" ]; then
+            echo "STATUS_RESULT=present"
+          else
+            echo "STATUS_RESULT=absent"
+            exit 1
+          fi
+
       - name: Report the verify-prebuilds inputs (A8)
         run: |
           echo "BUILD_B_EVENT=${{ github.event_name }}"
